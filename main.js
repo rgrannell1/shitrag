@@ -20,36 +20,17 @@ if (!SHITRAG_DB) {
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3312.0 Safari/537.36"';
 
-async function* fetchHeadlines(url, year, month, day) {
+async function* fetchHeadlines(browser, url, year, month, day) {
   if (url.includes('undefined')) {
     throw new Error('undefined in ' + url);
   }
 
-  const args = [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-infobars",
-    "--window-position=0,0",
-    "--ignore-certifcate-errors",
-    "--ignore-certifcate-errors-spki-list",
-    `--user-agent="${USER_AGENT}"`,
-  ];
-
-  const options = {
-    args,
-    headless: true,
-    ignoreHTTPSErrors: true,
-    userDataDir: "./tmp",
-  };
-
-  const browser = await puppeteer.launch(options);
   const page = await browser.newPage();
 
   try {
     await page.goto(url, { waitUntil: "networkidle2" });
   } catch (err) {
     throw new Error(`🗞️ | Failed to fetch ${url}`, {cause: err});
-    await browser.close();
     return;
   }
 
@@ -61,7 +42,7 @@ async function* fetchHeadlines(url, year, month, day) {
     yield { year, month, day, title, href };
   }
 
-  await browser.close();
+  await page.close();
 }
 
 async function insertPages(db) {
@@ -74,7 +55,11 @@ async function insertPages(db) {
       const days = daysInMonth(year, month);
 
       for (let day = 1; day <= days; day++) {
-        if (year === currentYear && month >= currentMonth && day > currentDay) {
+        // ignore days in the future
+        const monthInFuture = year >= currentYear && month > currentMonth;
+        const dayInFuture = year >= currentYear && month >= currentMonth && day > currentDay;
+
+        if (monthInFuture || dayInFuture) {
           continue;
         }
 
@@ -97,8 +82,10 @@ async function insertPages(db) {
   }
 }
 
-async function insertPageHeadlines(db, href, year, month, day) {
-  for await (const headline of fetchHeadlines(href, year, month, day)) {
+async function insertPageHeadlines(browser, db, href, year, month, day) {
+  let pages = 0;
+
+  for await (const headline of fetchHeadlines(browser, href, year, month, day)) {
     await db.run(
       "insert or ignore into headline values (?, ?, ?, ?, ?, ?)",
       href,
@@ -108,9 +95,11 @@ async function insertPageHeadlines(db, href, year, month, day) {
       headline.month,
       headline.day,
     );
+    pages++;
   }
 
   await db.run('update page set status = "SAVED" where id = ?', href);
+  return pages
 }
 
 async function retrieveHeadlines(db) {
@@ -118,12 +107,32 @@ async function retrieveHeadlines(db) {
     'select id, year, month, day from page where status = "NOT_SAVED"',
   );
 
+  const args = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-infobars",
+    "--window-position=0,0",
+    "--ignore-certifcate-errors",
+    "--ignore-certifcate-errors-spki-list",
+    `--user-agent="${USER_AGENT}"`,
+  ];
+
+  const options = {
+    args,
+    headless: true,
+    ignoreHTTPSErrors: true,
+    userDataDir: "./tmp",
+  };
+
+  const browser = await puppeteer.launch(options);
+
+  let pages = 0
   for (const row of rows) {
     const { id, year, month, day } = row;
 
-    console.log(`🗞️ | Scraping the shitrrag for ${year}-${month}-${day}`);
+    console.log(`🗞️ | Scraping the shitrrag for ${year}-${month}-${day} | Collected ${pages.toLocaleString()} extra headlines`);
 
-    await insertPageHeadlines(db, id, year, month, day);
+    pages +=  await insertPageHeadlines(browser, db, id, year, month, day);
 
     console.clear();
   }
