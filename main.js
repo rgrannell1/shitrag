@@ -26,12 +26,18 @@ async function* fetchHeadlines(browser, url, year, month, day) {
   }
 
   const page = await browser.newPage();
+  let navigated = false;
 
-  try {
-    await page.goto(url, { waitUntil: "networkidle2" });
-  } catch (err) {
+  for (let idx = 0; idx < 5; idx++) {
+    try {
+      await page.goto(url, { waitUntil: "networkidle2" });
+      navigated = true;
+      break;
+    } catch (err) { }
+  }
+
+  if (!navigated) {
     throw new Error(`🗞️ | Failed to fetch ${url}`, {cause: err});
-    return;
   }
 
   const links = await page.$$(".archive-articles a");
@@ -168,7 +174,7 @@ await db.open(SHITRAG_DB);
 
 await db.run(PAGE_TABLE);
 await db.run(HEADLINE_TABLE);
-await db.run(TITLE_TABLE);
+//await db.run(TITLE_TABLE);
 
 await insertPages(db);
 await retrieveHeadlines(db);
